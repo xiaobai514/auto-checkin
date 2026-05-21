@@ -3,6 +3,7 @@
 支持网站：
   1. justcn2.top  - 登录后进入"我的→用户中心"签到
   2. 1ck.org       - 登录后首页签到（含图片验证码识别）
+  3. 邮件通知      - 签到完成后发送结果邮件
 """
 
 import os
@@ -11,6 +12,9 @@ import time
 import base64
 import asyncio
 import logging
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
@@ -31,6 +35,13 @@ SITE2_URL   = "https://1ck.org/login"
 SITE2_EMAIL = os.environ["SITE2_EMAIL"]
 SITE2_PASS  = os.environ["SITE2_PASS"]
 
+# ── 邮件配置 ──────────────────────────────────────────────
+SMTP_SERVER  = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT    = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER    = os.environ.get("SMTP_USER", "")
+SMTP_PASS    = os.environ.get("SMTP_PASS", "")
+NOTIFY_EMAIL = os.environ.get("NOTIFY_EMAIL", "")
+
 # ── OCR 初始化（ddddocr） ────────────────────────────────
 def get_ocr():
     try:
@@ -43,11 +54,52 @@ def get_ocr():
         raise
 
 
+# ── 邮件发送 ──────────────────────────────────────────────
+def send_email(subject, body):
+    """发送邮件通知"""
+    if not all([SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASS, NOTIFY_EMAIL]):
+        log.warning("邮件配置不完整，跳过邮件通知")
+        return False
+    
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = SMTP_USER
+        msg["To"] = NOTIFY_EMAIL
+        msg["Subject"] = subject
+        
+        # HTML 格式邮件
+        html_body = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2 style="color: #333;">🔔 每日签到报告</h2>
+            <p style="color: #666;">时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <hr style="border: 1px solid #eee;">
+            <div style="padding: 10px;">{body}</div>
+            <hr style="border: 1px solid #eee;">
+            <p style="color: #999; font-size: 12px;">此邮件由 GitHub Actions 自动发送</p>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+        
+        log.info(f"邮件通知已发送至 {NOTIFY_EMAIL}")
+        return True
+    except Exception as e:
+        log.error(f"邮件发送失败: {e}")
+        return False
+
+
 # ════════════════════════════════════════════════════════
 #  网站 1：justcn2.top
 # ════════════════════════════════════════════════════════
 async def checkin_site1(page):
     log.info("=== [网站1] justcn2.top 开始签到 ===")
+    result_info = {"success": False, "message": ""}
     try:
         # 1. 登录
         await page.goto(SITE1_URL, wait_until="networkidle", timeout=30000)
@@ -85,7 +137,8 @@ async def checkin_site1(page):
         if not clicked:
             log.warning("[网站1] 未找到签到按钮，尝试截图排查")
             await page.screenshot(path="/tmp/site1_debug.png")
-            return False
+            result_info["message"] = "未找到签到按钮"
+            return result_info
 
         # 4. 等待签到弹窗/结果
         await page.wait_for_timeout(3000)
@@ -98,16 +151,21 @@ async def checkin_site1(page):
 
         if dialog_text:
             log.info(f"[网站1] 签到结果：{dialog_text.strip()}")
+            result_info["success"] = True
+            result_info["message"] = dialog_text.strip()
         else:
             # 备用：抓页面通知
             body = await page.inner_text("body")
             if "签到" in body or "流量" in body or "成功" in body:
                 log.info("[网站1] 签到成功（页面含成功标志）")
+                result_info["success"] = True
+                result_info["message"] = "签到成功"
             else:
                 log.warning("[网站1] 签到结果不明确，请查看截图")
                 await page.screenshot(path="/tmp/site1_result.png")
+                result_info["message"] = "签到结果不明确"
 
-        return True
+        return result_info
 
     except Exception as e:
         log.error(f"[网站1] 签到失败：{e}")
@@ -115,7 +173,8 @@ async def checkin_site1(page):
             await page.screenshot(path="/tmp/site1_error.png")
         except Exception:
             pass
-        return False
+        result_info["message"] = str(e)
+        return result_info
 
 
 # ════════════════════════════════════════════════════════
@@ -123,6 +182,7 @@ async def checkin_site1(page):
 # ════════════════════════════════════════════════════════
 async def checkin_site2(page, ocr):
     log.info("=== [网站2] 1ck.org 开始签到 ===")
+    result_info = {"success": False, "message": ""}
     try:
         # 1. 访问登录页（可能触发节点测速跳转）
         await page.goto(SITE2_URL, timeout=30000)
@@ -182,7 +242,8 @@ async def checkin_site2(page, ocr):
         if not login_success:
             log.error("[网站2] 多次验证码识别失败，放弃")
             await page.screenshot(path="/tmp/site2_login_fail.png")
-            return False
+            result_info["message"] = "验证码识别失败"
+            return result_info
 
         # 3. 签到
         await page.wait_for_timeout(2000)
@@ -209,12 +270,25 @@ async def checkin_site2(page, ocr):
         if not clicked:
             log.warning("[网站2] 未找到签到按钮，截图排查")
             await page.screenshot(path="/tmp/site2_debug.png")
-            return False
+            result_info["message"] = "未找到签到按钮"
+            return result_info
 
         await page.wait_for_timeout(3000)
-        log.info("[网站2] 签到操作完成")
+        
+        # 尝试获取签到结果
+        try:
+            dialog_text = await page.locator(".modal, .alert, .swal2-popup, [role='dialog']").first.inner_text(timeout=5000)
+            if dialog_text:
+                result_info["message"] = dialog_text.strip()
+            else:
+                result_info["message"] = "签到完成"
+        except Exception:
+            result_info["message"] = "签到完成"
+        
+        result_info["success"] = True
+        log.info(f"[网站2] 签到结果: {result_info['message']}")
         await page.screenshot(path="/tmp/site2_result.png")
-        return True
+        return result_info
 
     except Exception as e:
         log.error(f"[网站2] 签到失败：{e}")
@@ -222,7 +296,8 @@ async def checkin_site2(page, ocr):
             await page.screenshot(path="/tmp/site2_error.png")
         except Exception:
             pass
-        return False
+        result_info["message"] = str(e)
+        return result_info
 
 
 # ════════════════════════════════════════════════════════
@@ -258,12 +333,40 @@ async def main():
         await browser.close()
 
     # ── 汇总 ──
+    site1_success = results["site1"]["success"]
+    site2_success = results["site2"]["success"]
+    site1_msg = results["site1"]["message"]
+    site2_msg = results["site2"]["message"]
+    
     log.info("══════════════════════════════")
-    log.info(f"网站1 justcn2.top : {'✅ 成功' if results['site1'] else '❌ 失败'}")
-    log.info(f"网站2 1ck.org      : {'✅ 成功' if results['site2'] else '❌ 失败'}")
+    log.info(f"网站1 justcn2.top : {'✅ 成功' if site1_success else '❌ 失败'} - {site1_msg}")
+    log.info(f"网站2 1ck.org      : {'✅ 成功' if site2_success else '❌ 失败'} - {site2_msg}")
     log.info("══════════════════════════════")
 
-    if not all(results.values()):
+    # ── 发送邮件通知 ──
+    all_success = site1_success and site2_success
+    status_emoji = "✅" if all_success else "⚠️"
+    subject = f"{status_emoji} 每日签到报告 - {'全部成功' if all_success else '部分失败'}"
+    
+    email_body = f"""
+    <h3>签到结果汇总</h3>
+    <table style="border-collapse: collapse; width: 100%;">
+        <tr style="background-color: {'#d4edda' if site1_success else '#f8d7da'};">
+            <td style="padding: 10px; border: 1px solid #ddd;"><strong>网站1 (justcn2.top)</strong></td>
+            <td style="padding: 10px; border: 1px solid #ddd;">{'✅ 成功' if site1_success else '❌ 失败'}</td>
+            <td style="padding: 10px; border: 1px solid #ddd;">{site1_msg}</td>
+        </tr>
+        <tr style="background-color: {'#d4edda' if site2_success else '#f8d7da'};">
+            <td style="padding: 10px; border: 1px solid #ddd;"><strong>网站2 (1ck.org)</strong></td>
+            <td style="padding: 10px; border: 1px solid #ddd;">{'✅ 成功' if site2_success else '❌ 失败'}</td>
+            <td style="padding: 10px; border: 1px solid #ddd;">{site2_msg}</td>
+        </tr>
+    </table>
+    """
+    
+    send_email(subject, email_body)
+
+    if not all_success:
         sys.exit(1)  # 让 GitHub Actions 标记为失败
 
 

@@ -29,6 +29,9 @@ jobs:
       - name: 安装 Python 依赖
         run: pip install -r requirements.txt
 
+      - name: 修复 Ubuntu 24.04 依赖兼容性
+        run: sudo apt-get update && sudo -S -p '' apt-get install -y libasound2t64
+
       - name: 安装 Playwright 浏览器
         run: playwright install chromium --with-deps
 
@@ -38,6 +41,11 @@ jobs:
           SITE1_PASS:  ${{ secrets.SITE1_PASS }}
           SITE2_EMAIL: ${{ secrets.SITE2_EMAIL }}
           SITE2_PASS:  ${{ secrets.SITE2_PASS }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
         run: python checkin.py
 
       - name: 上传调试截图（仅失败时）
