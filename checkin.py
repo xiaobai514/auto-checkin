@@ -119,10 +119,10 @@ async def checkin_site1(page):
 
         # 5. 寻找并点击签到按钮
         checkin_selectors = [
-            "text=签到", "text=每日签到", "text=点击签到",
-            "a[href*='checkin']", "button:has-text('签到')",
+            "text=点我签到", "text=摇动手机签到", "text=签到",
+            "text=每日签到", "text=点击签到", "text=签到领",
+            "button:has-text('签到')", "a:has-text('签到')",
             ".checkin", "#checkin", "[onclick*='checkin']",
-            "text=签到领", "text=签到获取",
         ]
         clicked = False
         for sel in checkin_selectors:
@@ -226,7 +226,25 @@ async def checkin_site2(page, ocr):
         await page.wait_for_timeout(2000)
         log.info(f"[网站2] 最终URL: {page.url}")
 
-        # 3. 尝试登录（最多5次验证码重试）
+        # 3. 点击页面上的"登录"按钮进入登录界面
+        login_btn_selectors = [
+            "text=登录", "text=Login", "text=Sign In",
+            "a:has-text('登录')", "button:has-text('登录')",
+            ".login-btn", "#login-btn", "[href*='login']",
+        ]
+        for sel in login_btn_selectors:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible(timeout=2000):
+                    await btn.click()
+                    log.info(f"[网站2] 点击登录入口: {sel}")
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                    await page.wait_for_timeout(2000)
+                    break
+            except Exception:
+                continue
+
+        # 4. 尝试登录（最多5次验证码重试）
         login_success = False
         for attempt in range(5):
             log.info(f"[网站2] 登录尝试 {attempt+1}/5")
@@ -308,10 +326,10 @@ async def checkin_site2(page, ocr):
             result["message"] = "登录失败"
             return result
 
-        # 4. 签到
+        # 6. 签到 - 右上部"签到领奖"
         await page.wait_for_timeout(2000)
         checkin_selectors = [
-            "text=签到", "text=每日签到", "text=点击签到",
+            "text=签到领奖", "text=签到", "text=每日签到",
             "button:has-text('签到')", "a:has-text('签到')",
             "[onclick*='checkin']", ".checkin-btn", "#checkin",
         ]
