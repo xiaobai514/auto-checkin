@@ -113,17 +113,25 @@ async def checkin_site1(page):
             except Exception:
                 continue
 
-        # 4. 点击页面空白处关闭可能的下拉/提示
-        await page.mouse.click(10, 10)
+        # 4. 点击页面安全区域关闭可能的下拉/提示（避开顶部导航栏）
+        await page.mouse.click(400, 600)
         await page.wait_for_timeout(500)
 
-        # 5. 检查是否已签到
-        body_text = await page.inner_text("body")
-        if "今日已签到" in body_text or "已签到" in body_text:
-            log.info("[网站1] 今日已签到")
-            result["success"] = True
-            result["message"] = "今日已签到"
-            return result
+        # 5. 检查是否已签到（用 locator 而不是 inner_text，避免 Material Icons 干扰）
+        checkin_done_selectors = [
+            "text=今日已签到", "text=已签到", "text=已领取",
+            "text=签到成功", ":text('已签到')",
+        ]
+        for sel in checkin_done_selectors:
+            try:
+                el = page.locator(sel).first
+                if await el.is_visible(timeout=1000):
+                    log.info("[网站1] 今日已签到")
+                    result["success"] = True
+                    result["message"] = "今日已签到"
+                    return result
+            except:
+                continue
 
         # 6. 寻找并点击签到按钮（多位置尝试）
         checkin_selectors = [
@@ -406,6 +414,10 @@ async def checkin_site2(page, ocr):
                 '.captcha img', 'img[alt*="验证码"]',
                 'img[src*="code"]', 'img[alt*="captcha"]',
                 'img.captcha', '#captcha-img',
+                # base64 验证码图片（宽高较小的图片）
+                'img[src^="data:"][width="150"]',
+                'img[src^="data:"][width="120"]',
+                'img.my-auto[src^="data:"]',
             ]
             
             captcha_input = None
