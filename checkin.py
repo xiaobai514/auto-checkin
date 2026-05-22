@@ -359,8 +359,8 @@ async def checkin_site2(page, ocr):
 
         # 4. 尝试登录（最多5次验证码重试）
         login_success = False
-        for attempt in range(5):
-            log.info(f"[网站2] 登录尝试 {attempt+1}/5")
+        for attempt in range(10):
+            log.info(f"[网站2] 登录尝试 {attempt+1}/10")
 
             # 找邮箱输入框（多种选择器）
             email_filled = False
@@ -441,7 +441,16 @@ async def checkin_site2(page, ocr):
             
             if captcha_img and captcha_input:
                 try:
-                    img_bytes = await captcha_img.screenshot()
+                    # 优先从 base64 src 解码图片（比截图更准确）
+                    src = await captcha_img.get_attribute("src")
+                    if src and src.startswith("data:") and "," in src:
+                        import base64 as b64
+                        b64_data = src.split(",", 1)[1]
+                        img_bytes = b64.b64decode(b64_data)
+                        log.info(f"[网站2] 从base64解码验证码图片 ({len(img_bytes)} bytes)")
+                    else:
+                        img_bytes = await captcha_img.screenshot()
+                    
                     code = ocr.classification(img_bytes)
                     log.info(f"[网站2] OCR识别验证码: {code}")
                     await captcha_input.fill(str(code))
@@ -479,13 +488,9 @@ async def checkin_site2(page, ocr):
                 break
             else:
                 log.warning(f"[网站2] 登录失败，可能验证码错误")
-                # 刷新验证码重试
-                try:
-                    await captcha_img.click()
-                    await page.wait_for_timeout(1000)
-                except Exception:
-                    await page.reload()
-                    await page.wait_for_load_state("networkidle", timeout=10000)
+                # 重新导航到登录页（刷新验证码）
+                await page.goto(login_url, wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(2000)
 
         if not login_success:
             result["message"] = "登录失败"
