@@ -117,7 +117,15 @@ async def checkin_site1(page):
         await page.mouse.click(10, 10)
         await page.wait_for_timeout(500)
 
-        # 5. 寻找并点击签到按钮（多位置尝试）
+        # 5. 检查是否已签到
+        body_text = await page.inner_text("body")
+        if "今日已签到" in body_text or "已签到" in body_text:
+            log.info("[网站1] 今日已签到")
+            result["success"] = True
+            result["message"] = "今日已签到"
+            return result
+
+        # 6. 寻找并点击签到按钮（多位置尝试）
         checkin_selectors = [
             "text=点我签到", "text=摇动手机签到", "text=签到",
             "text=每日签到", "text=点击签到", "text=签到领",
@@ -330,37 +338,16 @@ async def checkin_site2(page, ocr):
         # 2. 等待页面完全加载
         await page.wait_for_load_state("networkidle", timeout=15000)
         await page.wait_for_timeout(2000)
+        
+        # 获取跳转后的域名
+        base_url = page.url.split('/login')[0] if '/login' in page.url else page.url.rsplit('/', 1)[0]
         log.info(f"[网站2] 最终URL: {page.url}")
 
-        # 3. 进入登录界面。当前页已经是登录表单时不要再点"登录"，避免误触提交按钮。
-        if await site2_has_login_form(page):
-            log.info("[网站2] 已在登录表单，跳过登录入口点击")
-        else:
-            login_entry_selectors = [
-                "nav a:has-text('登录')", "header a:has-text('登录')",
-                "a:has-text('登录')", "a:has-text('Login')",
-                "a:has-text('Sign In')", "a[href*='login']",
-                ".login-btn:not([type='submit'])", "#login-btn:not([type='submit'])",
-                "button.login-btn:not([type='submit'])",
-            ]
-            clicked_login_entry = False
-            for sel in login_entry_selectors:
-                try:
-                    btn = page.locator(sel).first
-                    if await btn.is_visible(timeout=2000):
-                        await btn.click()
-                        clicked_login_entry = True
-                        log.info(f"[网站2] 点击登录入口: {sel}")
-                        await page.wait_for_load_state("networkidle", timeout=10000)
-                        await page.wait_for_timeout(2000)
-                        break
-                except Exception:
-                    continue
-
-            if not clicked_login_entry and not await site2_has_login_form(page):
-                log.info("[网站2] 未找到登录入口，直接访问登录页")
-                await page.goto(SITE2_URL, wait_until="networkidle", timeout=30000)
-                await page.wait_for_timeout(1000)
+        # 3. 进入登录界面 - 直接访问登录页
+        login_url = f"{base_url}/login"
+        log.info(f"[网站2] 访问登录页: {login_url}")
+        await page.goto(login_url, wait_until="networkidle", timeout=30000)
+        await page.wait_for_timeout(2000)
 
         # 4. 尝试登录（最多5次验证码重试）
         login_success = False
