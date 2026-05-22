@@ -117,7 +117,7 @@ async def checkin_site1(page):
         await page.mouse.click(10, 10)
         await page.wait_for_timeout(500)
 
-        # 5. 寻找并点击签到按钮
+        # 5. 寻找并点击签到按钮（多位置尝试）
         checkin_selectors = [
             "text=点我签到", "text=摇动手机签到", "text=签到",
             "text=每日签到", "text=点击签到", "text=签到领",
@@ -125,6 +125,8 @@ async def checkin_site1(page):
             ".checkin", "#checkin", "[onclick*='checkin']",
         ]
         clicked = False
+        
+        # 尝试1: 当前视图
         for sel in checkin_selectors:
             try:
                 btn = page.locator(sel).first
@@ -135,9 +137,9 @@ async def checkin_site1(page):
                     break
             except Exception:
                 continue
-
+        
+        # 尝试2: 滚动到顶部
         if not clicked:
-            # 再试一次：滚动页面后重试
             await page.evaluate("window.scrollTo(0, 0)")
             await page.wait_for_timeout(1000)
             for sel in checkin_selectors:
@@ -146,10 +148,43 @@ async def checkin_site1(page):
                     if await btn.is_visible(timeout=1000):
                         await btn.click()
                         clicked = True
-                        log.info(f"[网站1] 滚动后点击签到: {sel}")
+                        log.info(f"[网站1] 顶部点击签到: {sel}")
                         break
                 except Exception:
                     continue
+        
+        # 尝试3: 滚动到底部
+        if not clicked:
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.wait_for_timeout(1000)
+            for sel in checkin_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if await btn.is_visible(timeout=1000):
+                        await btn.click()
+                        clicked = True
+                        log.info(f"[网站1] 底部点击签到: {sel}")
+                        break
+                except Exception:
+                    continue
+        
+        # 尝试4: 逐步滚动页面查找
+        if not clicked:
+            for scroll_y in [300, 600, 900, 1200, 1500]:
+                await page.evaluate(f"window.scrollTo(0, {scroll_y})")
+                await page.wait_for_timeout(500)
+                for sel in checkin_selectors:
+                    try:
+                        btn = page.locator(sel).first
+                        if await btn.is_visible(timeout=500):
+                            await btn.click()
+                            clicked = True
+                            log.info(f"[网站1] 滚动{scroll_y}px后点击签到: {sel}")
+                            break
+                    except Exception:
+                        continue
+                if clicked:
+                    break
 
         if not clicked:
             log.warning("[网站1] 仍未找到签到按钮")
@@ -280,17 +315,53 @@ async def checkin_site2(page, ocr):
                     continue
 
             # 处理验证码
-            captcha_input = page.locator('input[name="captcha"], input[placeholder*="验证码"], input[id*="captcha"]').first
-            captcha_img = page.locator('img[src*="captcha"], img[id*="captcha"], .captcha img, img[alt*="验证码"]').first
-
-            try:
-                if await captcha_img.is_visible(timeout=3000):
+            captcha_selectors_input = [
+                'input[name="captcha"]', 'input[placeholder*="验证码"]', 
+                'input[id*="captcha"]', 'input[name="code"]',
+                'input[placeholder*="code"]', 'input[type="text"]',
+            ]
+            captcha_selectors_img = [
+                'img[src*="captcha"]', 'img[id*="captcha"]', 
+                '.captcha img', 'img[alt*="验证码"]',
+                'img[src*="code"]', 'img[alt*="captcha"]',
+                'img.captcha', '#captcha-img',
+            ]
+            
+            captcha_input = None
+            captcha_img = None
+            
+            # 找验证码输入框
+            for sel in captcha_selectors_input:
+                try:
+                    inp = page.locator(sel).first
+                    if await inp.is_visible(timeout=1000):
+                        captcha_input = inp
+                        log.info(f"[网站2] 找到验证码输入框: {sel}")
+                        break
+                except:
+                    continue
+            
+            # 找验证码图片
+            for sel in captcha_selectors_img:
+                try:
+                    img = page.locator(sel).first
+                    if await img.is_visible(timeout=1000):
+                        captcha_img = img
+                        log.info(f"[网站2] 找到验证码图片: {sel}")
+                        break
+                except:
+                    continue
+            
+            if captcha_img and captcha_input:
+                try:
                     img_bytes = await captcha_img.screenshot()
                     code = ocr.classification(img_bytes)
-                    log.info(f"[网站2] 验证码: {code}")
+                    log.info(f"[网站2] OCR识别验证码: {code}")
                     await captcha_input.fill(str(code))
-            except Exception as e:
-                log.warning(f"[网站2] 验证码处理: {e}")
+                except Exception as e:
+                    log.warning(f"[网站2] 验证码处理失败: {e}")
+            else:
+                log.warning(f"[网站2] 未找到验证码元素 (input={captcha_input is not None}, img={captcha_img is not None})")
 
             # 提交登录
             for sel in ['button[type="submit"]', 'button:has-text("登录")', 'button:has-text("Login")', 'input[type="submit"]']:
