@@ -229,6 +229,77 @@ async def checkin_site1(page):
         return result
 
 
+async def first_visible(page, selectors, timeout=1000):
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            if await loc.is_visible(timeout=timeout):
+                return sel, loc
+        except Exception:
+            continue
+    return None, None
+
+
+async def site2_has_login_form(page):
+    password_selectors = [
+        'input[type="password"]',
+        'input[name="passwd"]',
+        'input[name="password"]',
+    ]
+    _, password = await first_visible(page, password_selectors, timeout=800)
+    return password is not None
+
+
+async def site2_is_logged_in(page):
+    if "login" not in page.url.lower():
+        return True
+
+    logged_in_selectors = [
+        "text=退出", "text=登出", "text=注销", "text=用户中心",
+        "text=签到领奖", "a:has-text('Logout')", "button:has-text('Logout')",
+    ]
+    _, logged_in_marker = await first_visible(page, logged_in_selectors, timeout=800)
+    return logged_in_marker is not None
+
+
+async def site2_find_captcha_input(page):
+    captcha_selectors_input = [
+        'input[name="captcha"]',
+        'input[placeholder*="验证码"]',
+        'input[id*="captcha"]',
+        'input[name="code"]',
+        'input[placeholder*="code"]',
+        'input[type="text"]:not([name*="email"]):not([name*="mail"]):not([placeholder*="邮箱"]):not([placeholder*="email"]):not([id*="email"]):not([id*="mail"])',
+    ]
+
+    for sel in captcha_selectors_input:
+        try:
+            candidates = page.locator(sel)
+            count = await candidates.count()
+            for idx in range(count):
+                inp = candidates.nth(idx)
+                if not await inp.is_visible(timeout=500):
+                    continue
+
+                name = (await inp.get_attribute("name") or "").lower()
+                field_id = (await inp.get_attribute("id") or "").lower()
+                placeholder = (await inp.get_attribute("placeholder") or "").lower()
+                value = await inp.input_value(timeout=500)
+                email_like = (
+                    "email" in name or "mail" in name or
+                    "email" in field_id or "mail" in field_id or
+                    "email" in placeholder or "邮箱" in placeholder or
+                    value == SITE2_EMAIL
+                )
+                if email_like:
+                    continue
+                return sel, inp
+        except Exception:
+            continue
+
+    return None, None
+
+
 # ════════════════════════════════════════════════════════
 #  网站 2：1ck.org（自动跳转找节点 + 验证码）
 # ════════════════════════════════════════════════════════
@@ -261,23 +332,35 @@ async def checkin_site2(page, ocr):
         await page.wait_for_timeout(2000)
         log.info(f"[网站2] 最终URL: {page.url}")
 
-        # 3. 点击页面上的"登录"按钮进入登录界面
-        login_btn_selectors = [
-            "text=登录", "text=Login", "text=Sign In",
-            "a:has-text('登录')", "button:has-text('登录')",
-            ".login-btn", "#login-btn", "[href*='login']",
-        ]
-        for sel in login_btn_selectors:
-            try:
-                btn = page.locator(sel).first
-                if await btn.is_visible(timeout=2000):
-                    await btn.click()
-                    log.info(f"[网站2] 点击登录入口: {sel}")
-                    await page.wait_for_load_state("networkidle", timeout=10000)
-                    await page.wait_for_timeout(2000)
-                    break
-            except Exception:
-                continue
+        # 3. 进入登录界面。当前页已经是登录表单时不要再点"登录"，避免误触提交按钮。
+        if await site2_has_login_form(page):
+            log.info("[网站2] 已在登录表单，跳过登录入口点击")
+        else:
+            login_entry_selectors = [
+                "nav a:has-text('登录')", "header a:has-text('登录')",
+                "a:has-text('登录')", "a:has-text('Login')",
+                "a:has-text('Sign In')", "a[href*='login']",
+                ".login-btn:not([type='submit'])", "#login-btn:not([type='submit'])",
+                "button.login-btn:not([type='submit'])",
+            ]
+            clicked_login_entry = False
+            for sel in login_entry_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if await btn.is_visible(timeout=2000):
+                        await btn.click()
+                        clicked_login_entry = True
+                        log.info(f"[网站2] 点击登录入口: {sel}")
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                        await page.wait_for_timeout(2000)
+                        break
+                except Exception:
+                    continue
+
+            if not clicked_login_entry and not await site2_has_login_form(page):
+                log.info("[网站2] 未找到登录入口，直接访问登录页")
+                await page.goto(SITE2_URL, wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(1000)
 
         # 4. 尝试登录（最多5次验证码重试）
         login_success = False
@@ -286,8 +369,17 @@ async def checkin_site2(page, ocr):
 
             # 找邮箱输入框（多种选择器）
             email_filled = False
-            for sel in ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="邮箱"]', 
-                       'input[placeholder*="email"]', 'input[type="text"]']:
+            email_selectors = [
+                'input[type="email"]',
+                'input[name="email"]',
+                'input[name*="mail"]',
+                'input[id*="email"]',
+                'input[id*="mail"]',
+                'input[placeholder*="邮箱"]',
+                'input[placeholder*="email"]',
+                'input[type="text"]:not([name*="captcha"]):not([name="code"]):not([id*="captcha"]):not([placeholder*="验证码"]):not([placeholder*="code"])',
+            ]
+            for sel in email_selectors:
                 try:
                     inp = page.locator(sel).first
                     if await inp.is_visible(timeout=2000):
@@ -304,22 +396,24 @@ async def checkin_site2(page, ocr):
                 break
 
             # 找密码输入框
+            password_filled = False
             for sel in ['input[type="password"]', 'input[name="passwd"]', 'input[name="password"]']:
                 try:
                     inp = page.locator(sel).first
                     if await inp.is_visible(timeout=2000):
                         await inp.fill(SITE2_PASS)
+                        password_filled = True
                         log.info(f"[网站2] 填写密码: {sel}")
                         break
                 except Exception:
                     continue
 
+            if not password_filled:
+                log.warning("[网站2] 未找到密码输入框")
+                await page.screenshot(path="/tmp/site2_no_password.png")
+                break
+
             # 处理验证码
-            captcha_selectors_input = [
-                'input[name="captcha"]', 'input[placeholder*="验证码"]', 
-                'input[id*="captcha"]', 'input[name="code"]',
-                'input[placeholder*="code"]', 'input[type="text"]',
-            ]
             captcha_selectors_img = [
                 'img[src*="captcha"]', 'img[id*="captcha"]', 
                 '.captcha img', 'img[alt*="验证码"]',
@@ -330,16 +424,10 @@ async def checkin_site2(page, ocr):
             captcha_input = None
             captcha_img = None
             
-            # 找验证码输入框
-            for sel in captcha_selectors_input:
-                try:
-                    inp = page.locator(sel).first
-                    if await inp.is_visible(timeout=1000):
-                        captcha_input = inp
-                        log.info(f"[网站2] 找到验证码输入框: {sel}")
-                        break
-                except:
-                    continue
+            # 找验证码输入框，排除已经填写了邮箱的输入框
+            captcha_input_sel, captcha_input = await site2_find_captcha_input(page)
+            if captcha_input:
+                log.info(f"[网站2] 找到验证码输入框: {captcha_input_sel}")
             
             # 找验证码图片
             for sel in captcha_selectors_img:
@@ -364,22 +452,29 @@ async def checkin_site2(page, ocr):
                 log.warning(f"[网站2] 未找到验证码元素 (input={captcha_input is not None}, img={captcha_img is not None})")
 
             # 提交登录
+            submitted = False
             for sel in ['button[type="submit"]', 'button:has-text("登录")', 'button:has-text("Login")', 'input[type="submit"]']:
                 try:
                     btn = page.locator(sel).first
                     if await btn.is_visible(timeout=2000):
                         await btn.click()
+                        submitted = True
                         log.info(f"[网站2] 点击登录: {sel}")
                         break
                 except Exception:
                     continue
+
+            if not submitted:
+                log.warning("[网站2] 未找到登录提交按钮")
+                await page.screenshot(path="/tmp/site2_no_submit.png")
+                break
 
             await page.wait_for_load_state("networkidle", timeout=15000)
             await page.wait_for_timeout(2000)
 
             # 检查登录结果
             current_url = page.url
-            if "login" not in current_url.lower():
+            if await site2_is_logged_in(page):
                 login_success = True
                 log.info(f"[网站2] 登录成功! URL: {current_url}")
                 break
