@@ -60,10 +60,14 @@ jobs:
 
       - name: 执行每日签到
         env:
-          SITE1_EMAIL: ${{ secrets.SITE1_EMAIL }}
-          SITE1_PASS:  ${{ secrets.SITE1_PASS }}
-          SITE2_EMAIL: ${{ secrets.SITE2_EMAIL }}
-          SITE2_PASS:  ${{ secrets.SITE2_PASS }}
+          SITE1_EMAIL_1: ${{ secrets.SITE1_EMAIL_1 }}
+          SITE1_PASS_1:  ${{ secrets.SITE1_PASS_1 }}
+          SITE1_EMAIL_2: ${{ secrets.SITE1_EMAIL_2 }}
+          SITE1_PASS_2:  ${{ secrets.SITE1_PASS_2 }}
+          SITE2_EMAIL_1: ${{ secrets.SITE2_EMAIL_1 }}
+          SITE2_PASS_1:  ${{ secrets.SITE2_PASS_1 }}
+          SITE2_EMAIL_2: ${{ secrets.SITE2_EMAIL_2 }}
+          SITE2_PASS_2:  ${{ secrets.SITE2_PASS_2 }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
           SMTP_USER:   ${{ secrets.SMTP_USER }}

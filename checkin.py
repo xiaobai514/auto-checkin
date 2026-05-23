@@ -24,14 +24,36 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── 从环境变量读取凭据 ────────────────────────────────────
-SITE1_URL   = "https://justcn2.top/auth/login"
-SITE1_EMAIL = os.environ["SITE1_EMAIL"]
-SITE1_PASS  = os.environ["SITE1_PASS"]
+# ── 从环境变量读取凭据（支持多账号） ──────────────────────
+# 网站1: justcn2.top
+SITE1_URL = "https://justcn2.top/auth/login"
+# 网站2: 1ck.org
+SITE2_URL = "https://1ck.org/login"
 
-SITE2_URL   = "https://1ck.org/login"
-SITE2_EMAIL = os.environ["SITE2_EMAIL"]
-SITE2_PASS  = os.environ["SITE2_PASS"]
+def load_accounts(prefix):
+    """加载多账号：读取 {PREFIX}_EMAIL_1, {PREFIX}_PASS_1, {PREFIX}_EMAIL_2, ..."""
+    accounts = []
+    i = 1
+    while True:
+        email = os.environ.get(f"{prefix}_EMAIL_{i}", "")
+        password = os.environ.get(f"{prefix}_PASS_{i}", "")
+        if not email or not password:
+            break
+        accounts.append({"email": email, "pass": password, "label": f"账号{i}"})
+        i += 1
+    # 兼容旧格式（无后缀 _1）
+    if not accounts:
+        email = os.environ.get(f"{prefix}_EMAIL", "")
+        password = os.environ.get(f"{prefix}_PASS", "")
+        if email and password:
+            accounts.append({"email": email, "pass": password, "label": "账号1"})
+    return accounts
+
+SITE1_ACCOUNTS = load_accounts("SITE1")
+SITE2_ACCOUNTS = load_accounts("SITE2")
+
+log.info(f"网站1 justcn2.top: {len(SITE1_ACCOUNTS)} 个账号")
+log.info(f"网站2 1ck.org    : {len(SITE2_ACCOUNTS)} 个账号")
 
 # ── 邮件配置 ──────────────────────────────────────────────
 SMTP_SERVER  = os.environ.get("SMTP_SERVER", "smtp.qq.com")
@@ -78,18 +100,19 @@ def send_email(subject, body):
 # ════════════════════════════════════════════════════════
 #  网站 1：justcn2.top
 # ════════════════════════════════════════════════════════
-async def checkin_site1(page):
-    log.info("=== [网站1] justcn2.top 开始签到 ===")
-    result = {"success": False, "message": ""}
+async def checkin_site1(page, email, password, label="账号1"):
+    tag = f"[网站1-{label}]"
+    log.info(f"=== {tag} justcn2.top 开始签到 ===")
+    result = {"success": False, "message": "", "site": "justcn2.top", "label": label}
     try:
         # 1. 登录
         await page.goto(SITE1_URL, wait_until="networkidle", timeout=30000)
-        await page.fill('input[type="email"], input[name="email"]', SITE1_EMAIL)
-        await page.fill('input[type="password"], input[name="passwd"]', SITE1_PASS)
+        await page.fill('input[type="email"], input[name="email"]', email)
+        await page.fill('input[type="password"], input[name="passwd"]', password)
         await page.click('button[type="submit"]')
         await page.wait_for_load_state("networkidle", timeout=15000)
         await page.wait_for_timeout(2000)
-        log.info("[网站1] 登录成功")
+        log.info("{tag} 登录成功")
 
         # 2. 跳转到用户中心
         await page.goto("https://justcn2.top/user", wait_until="networkidle", timeout=20000)
@@ -108,7 +131,7 @@ async def checkin_site1(page):
                 btn = page.locator(sel).first
                 if await btn.is_visible(timeout=1000):
                     await btn.click()
-                    log.info(f"[网站1] 关闭弹窗: {sel}")
+                    log.info(f"{tag} 关闭弹窗: {sel}")
                     await page.wait_for_timeout(500)
             except Exception:
                 continue
@@ -126,7 +149,7 @@ async def checkin_site1(page):
             try:
                 el = page.locator(sel).first
                 if await el.is_visible(timeout=1000):
-                    log.info("[网站1] 今日已签到")
+                    log.info("{tag} 今日已签到")
                     result["success"] = True
                     result["message"] = "今日已签到"
                     return result
@@ -149,7 +172,7 @@ async def checkin_site1(page):
                 if await btn.is_visible(timeout=2000):
                     await btn.click()
                     clicked = True
-                    log.info(f"[网站1] 点击签到: {sel}")
+                    log.info(f"{tag} 点击签到: {sel}")
                     break
             except Exception:
                 continue
@@ -164,7 +187,7 @@ async def checkin_site1(page):
                     if await btn.is_visible(timeout=1000):
                         await btn.click()
                         clicked = True
-                        log.info(f"[网站1] 顶部点击签到: {sel}")
+                        log.info(f"{tag} 顶部点击签到: {sel}")
                         break
                 except Exception:
                     continue
@@ -179,7 +202,7 @@ async def checkin_site1(page):
                     if await btn.is_visible(timeout=1000):
                         await btn.click()
                         clicked = True
-                        log.info(f"[网站1] 底部点击签到: {sel}")
+                        log.info(f"{tag} 底部点击签到: {sel}")
                         break
                 except Exception:
                     continue
@@ -195,7 +218,7 @@ async def checkin_site1(page):
                         if await btn.is_visible(timeout=500):
                             await btn.click()
                             clicked = True
-                            log.info(f"[网站1] 滚动{scroll_y}px后点击签到: {sel}")
+                            log.info(f"{tag} 滚动{scroll_y}px后点击签到: {sel}")
                             break
                     except Exception:
                         continue
@@ -203,7 +226,7 @@ async def checkin_site1(page):
                     break
 
         if not clicked:
-            log.warning("[网站1] 仍未找到签到按钮")
+            log.warning("{tag} 仍未找到签到按钮")
             await page.screenshot(path="/tmp/site1_debug.png")
             result["message"] = "未找到签到按钮"
             return result
@@ -220,7 +243,7 @@ async def checkin_site1(page):
                 continue
 
         if dialog_text:
-            log.info(f"[网站1] 签到结果: {dialog_text.strip()}")
+            log.info(f"{tag} 签到结果: {dialog_text.strip()}")
             result["success"] = True
             result["message"] = dialog_text.strip()
         else:
@@ -229,17 +252,17 @@ async def checkin_site1(page):
                 if keyword in body:
                     result["success"] = True
                     result["message"] = f"签到成功 (检测到'{keyword}')"
-                    log.info(f"[网站1] {result['message']}")
+                    log.info(f"{tag} {result['message']}")
                     break
             if not result["success"]:
                 result["success"] = True
                 result["message"] = "签到操作已完成"
-                log.info("[网站1] 签到操作已完成")
+                log.info("{tag} 签到操作已完成")
 
         return result
 
     except Exception as e:
-        log.error(f"[网站1] 失败: {e}")
+        log.error(f"{tag} 失败: {e}")
         await page.screenshot(path="/tmp/site1_error.png")
         result["message"] = str(e)
         return result
@@ -280,7 +303,7 @@ async def site2_is_logged_in(page):
     return logged_in_marker is not None
 
 
-async def site2_find_captcha_input(page):
+async def site2_find_captcha_input(page, email=""):
     captcha_selectors_input = [
         'input[name="captcha"]',
         'input[placeholder*="验证码"]',
@@ -307,7 +330,7 @@ async def site2_find_captcha_input(page):
                     "email" in name or "mail" in name or
                     "email" in field_id or "mail" in field_id or
                     "email" in placeholder or "邮箱" in placeholder or
-                    value == SITE2_EMAIL
+                    value == email
                 )
                 if email_like:
                     continue
@@ -321,9 +344,10 @@ async def site2_find_captcha_input(page):
 # ════════════════════════════════════════════════════════
 #  网站 2：1ck.org（自动跳转找节点 + 验证码）
 # ════════════════════════════════════════════════════════
-async def checkin_site2(page, ocr):
-    log.info("=== [网站2] 1ck.org 开始签到 ===")
-    result = {"success": False, "message": ""}
+async def checkin_site2(page, ocr, email, password, label="账号1"):
+    tag = f"[网站2-{label}]"
+    log.info(f"=== {tag} 1ck.org 开始签到 ===")
+    result = {"success": False, "message": "", "site": "1ck.org", "label": label}
     try:
         # 1. 访问并等待跳转稳定
         await page.goto(SITE2_URL, timeout=60000)
@@ -337,12 +361,12 @@ async def checkin_site2(page, ocr):
             if current == last_url:
                 stable_count += 1
                 if stable_count >= 3:
-                    log.info(f"[网站2] 跳转稳定: {current}")
+                    log.info(f"{tag} 跳转稳定: {current}")
                     break
             else:
                 stable_count = 0
                 last_url = current
-                log.info(f"[网站2] 跳转中: {current}")
+                log.info(f"{tag} 跳转中: {current}")
             await page.wait_for_timeout(2000)
 
         # 2. 等待页面完全加载
@@ -351,19 +375,19 @@ async def checkin_site2(page, ocr):
         
         # 获取跳转后的域名
         base_url = page.url.split('/login')[0] if '/login' in page.url else page.url.rsplit('/', 1)[0]
-        log.info(f"[网站2] 最终URL: {page.url}")
+        log.info(f"{tag} 最终URL: {page.url}")
 
         # 3. 进入登录界面
         import random
         login_url = f"{base_url}/login"
-        log.info(f"[网站2] 访问登录页: {login_url}")
+        log.info(f"{tag} 访问登录页: {login_url}")
         await page.goto(login_url, wait_until="networkidle", timeout=30000)
         await page.wait_for_timeout(2000)
 
         # 4. 尝试登录（最多5次验证码重试）
         login_success = False
         for attempt in range(20):
-            log.info(f"[网站2] 登录尝试 {attempt+1}/20")
+            log.info(f"{tag} 登录尝试 {attempt+1}/20")
 
             # 找邮箱输入框（多种选择器）
             email_filled = False
@@ -381,15 +405,15 @@ async def checkin_site2(page, ocr):
                 try:
                     inp = page.locator(sel).first
                     if await inp.is_visible(timeout=2000):
-                        await inp.fill(SITE2_EMAIL)
+                        await inp.fill(email)
                         email_filled = True
-                        log.info(f"[网站2] 填写邮箱: {sel}")
+                        log.info(f"{tag} 填写邮箱: {sel}")
                         break
                 except Exception:
                     continue
 
             if not email_filled:
-                log.warning("[网站2] 未找到邮箱输入框")
+                log.warning("{tag} 未找到邮箱输入框")
                 await page.screenshot(path="/tmp/site2_no_email.png")
                 break
 
@@ -399,15 +423,15 @@ async def checkin_site2(page, ocr):
                 try:
                     inp = page.locator(sel).first
                     if await inp.is_visible(timeout=2000):
-                        await inp.fill(SITE2_PASS)
+                        await inp.fill(password)
                         password_filled = True
-                        log.info(f"[网站2] 填写密码: {sel}")
+                        log.info(f"{tag} 填写密码: {sel}")
                         break
                 except Exception:
                     continue
 
             if not password_filled:
-                log.warning("[网站2] 未找到密码输入框")
+                log.warning("{tag} 未找到密码输入框")
                 await page.screenshot(path="/tmp/site2_no_password.png")
                 break
 
@@ -425,9 +449,9 @@ async def checkin_site2(page, ocr):
             captcha_img = None
             
             # 找验证码输入框，排除已经填写了邮箱的输入框
-            captcha_input_sel, captcha_input = await site2_find_captcha_input(page)
+            captcha_input_sel, captcha_input = await site2_find_captcha_input(page, email)
             if captcha_input:
-                log.info(f"[网站2] 找到验证码输入框: {captcha_input_sel}")
+                log.info(f"{tag} 找到验证码输入框: {captcha_input_sel}")
             
             # 找验证码图片
             for sel in captcha_selectors_img:
@@ -435,7 +459,7 @@ async def checkin_site2(page, ocr):
                     img = page.locator(sel).first
                     if await img.is_visible(timeout=1000):
                         captcha_img = img
-                        log.info(f"[网站2] 找到验证码图片: {sel}")
+                        log.info(f"{tag} 找到验证码图片: {sel}")
                         break
                 except:
                     continue
@@ -448,7 +472,7 @@ async def checkin_site2(page, ocr):
                         import base64 as b64
                         b64_data = src.split(",", 1)[1]
                         img_bytes = b64.b64decode(b64_data)
-                        log.info(f"[网站2] 从base64解码验证码图片 ({len(img_bytes)} bytes)")
+                        log.info(f"{tag} 从base64解码验证码图片 ({len(img_bytes)} bytes)")
                     else:
                         img_bytes = await captcha_img.screenshot()
                     
@@ -464,15 +488,15 @@ async def checkin_site2(page, ocr):
                     # 只取前4位
                     if len(code) > 4:
                         code = code[:4]
-                    log.info(f"[网站2] OCR识别验证码: {code}")
+                    log.info(f"{tag} OCR识别验证码: {code}")
                     if len(code) < 4:
-                        log.warning(f"[网站2] 验证码位数不足: {code}")
+                        log.warning(f"{tag} 验证码位数不足: {code}")
                         continue
                     await captcha_input.fill(str(code))
                 except Exception as e:
-                    log.warning(f"[网站2] 验证码处理失败: {e}")
+                    log.warning(f"{tag} 验证码处理失败: {e}")
             else:
-                log.warning(f"[网站2] 未找到验证码元素 (input={captcha_input is not None}, img={captcha_img is not None})")
+                log.warning(f"{tag} 未找到验证码元素 (input={captcha_input is not None}, img={captcha_img is not None})")
 
             # 提交登录
             submitted = False
@@ -482,13 +506,13 @@ async def checkin_site2(page, ocr):
                     if await btn.is_visible(timeout=2000):
                         await btn.click()
                         submitted = True
-                        log.info(f"[网站2] 点击登录: {sel}")
+                        log.info(f"{tag} 点击登录: {sel}")
                         break
                 except Exception:
                     continue
 
             if not submitted:
-                log.warning("[网站2] 未找到登录提交按钮")
+                log.warning("{tag} 未找到登录提交按钮")
                 await page.screenshot(path="/tmp/site2_no_submit.png")
                 break
 
@@ -499,10 +523,10 @@ async def checkin_site2(page, ocr):
             current_url = page.url
             if await site2_is_logged_in(page):
                 login_success = True
-                log.info(f"[网站2] 登录成功! URL: {current_url}")
+                log.info(f"{tag} 登录成功! URL: {current_url}")
                 break
             else:
-                log.warning(f"[网站2] 登录失败，可能验证码错误")
+                log.warning(f"{tag} 登录失败，可能验证码错误")
                 # 重新导航到登录页（刷新验证码）
                 await page.goto(login_url, wait_until="networkidle", timeout=30000)
                 await page.wait_for_timeout(2000)
@@ -533,7 +557,7 @@ async def checkin_site2(page, ocr):
                 btn = page.locator(sel).first
                 if await btn.is_visible(timeout=500):
                     await btn.click()
-                    log.info(f"[网站2] 关闭弹窗: {sel}")
+                    log.info(f"{tag} 关闭弹窗: {sel}")
                     await page.wait_for_timeout(500)
             except Exception:
                 continue
@@ -553,7 +577,7 @@ async def checkin_site2(page, ocr):
             try:
                 el = page.locator(sel).first
                 if await el.is_visible(timeout=1000):
-                    log.info("[网站2] 今日已签到")
+                    log.info("{tag} 今日已签到")
                     result["success"] = True
                     result["message"] = "今日已签到"
                     return result
@@ -583,7 +607,7 @@ async def checkin_site2(page, ocr):
                 # 用 all() 找所有匹配元素，逐个检查可见性
                 locators = page.locator(sel)
                 count = await locators.count()
-                log.info(f"[网站2] 选择器 '{sel}' 匹配到 {count} 个元素")
+                log.info(f"{tag} 选择器 '{sel}' 匹配到 {count} 个元素")
                 for i in range(count):
                     el = locators.nth(i)
                     try:
@@ -593,20 +617,20 @@ async def checkin_site2(page, ocr):
                             await page.wait_for_timeout(500)
                             await el.click(timeout=5000)
                             clicked = True
-                            log.info(f"[网站2] 点击签到: {sel} (第{i+1}个匹配)")
+                            log.info(f"{tag} 点击签到: {sel} (第{i+1}个匹配)")
                             break
                     except Exception as e:
-                        log.debug(f"[网站2] 元素 {sel}[{i}] 不可点击: {e}")
+                        log.debug(f"{tag} 元素 {sel}[{i}] 不可点击: {e}")
                         continue
                 if clicked:
                     break
             except Exception as e:
-                log.debug(f"[网站2] 选择器 {sel} 失败: {e}")
+                log.debug(f"{tag} 选择器 {sel} 失败: {e}")
                 continue
 
         # 尝试2: 用 JavaScript 直接查找并点击
         if not clicked:
-            log.info("[网站2] 尝试 JS 直接查找签到按钮...")
+            log.info("{tag} 尝试 JS 直接查找签到按钮...")
             js_result = await page.evaluate("""
                 () => {
                     // 查找所有包含"签到"文本的元素
@@ -631,7 +655,7 @@ async def checkin_site2(page, ocr):
                     return found;
                 }
             """)
-            log.info(f"[网站2] JS找到 {len(js_result)} 个签到元素: {js_result}")
+            log.info(f"{tag} JS找到 {len(js_result)} 个签到元素: {js_result}")
 
             for item in js_result:
                 if item.get('visible') and item.get('w', 0) > 10:
@@ -642,14 +666,14 @@ async def checkin_site2(page, ocr):
                             item['y'] + item['h'] / 2
                         )
                         clicked = True
-                        log.info(f"[网站2] JS坐标点击签到: {item}")
+                        log.info(f"{tag} JS坐标点击签到: {item}")
                         break
                     except Exception as e:
-                        log.warning(f"[网站2] JS坐标点击失败: {e}")
+                        log.warning(f"{tag} JS坐标点击失败: {e}")
 
         # 尝试3: 用 getByText 精确匹配
         if not clicked:
-            log.info("[网站2] 尝试 getByText 查找...")
+            log.info("{tag} 尝试 getByText 查找...")
             for text in ["签到领奖", "签到", "每日签到"]:
                 try:
                     el = page.get_by_text(text, exact=False).first
@@ -657,14 +681,14 @@ async def checkin_site2(page, ocr):
                         await el.scroll_into_view_if_needed(timeout=3000)
                         await el.click(timeout=5000)
                         clicked = True
-                        log.info(f"[网站2] getByText 点击: {text}")
+                        log.info(f"{tag} getByText 点击: {text}")
                         break
                 except Exception as e:
-                    log.debug(f"[网站2] getByText '{text}' 失败: {e}")
+                    log.debug(f"{tag} getByText '{text}' 失败: {e}")
                     continue
 
         if not clicked:
-            log.warning("[网站2] 仍未找到签到按钮")
+            log.warning("{tag} 仍未找到签到按钮")
             await page.screenshot(path="/tmp/site2_debug.png")
             result["message"] = "未找到签到按钮"
             return result
@@ -685,11 +709,11 @@ async def checkin_site2(page, ocr):
             result["message"] = "签到完成"
         
         result["success"] = True
-        log.info(f"[网站2] 签到结果: {result['message']}")
+        log.info(f"{tag} 签到结果: {result['message']}")
         return result
 
     except Exception as e:
-        log.error(f"[网站2] 失败: {e}")
+        log.error(f"{tag} 失败: {e}")
         await page.screenshot(path="/tmp/site2_error.png")
         result["message"] = str(e)
         return result
@@ -700,8 +724,13 @@ async def checkin_site2(page, ocr):
 # ════════════════════════════════════════════════════════
 async def main():
     log.info(f"签到任务开始 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if not SITE1_ACCOUNTS and not SITE2_ACCOUNTS:
+        log.error("没有配置任何账号！请设置 SITE1_EMAIL_1/SITE1_PASS_1 等环境变量")
+        sys.exit(1)
+
     ocr = get_ocr()
-    results = {}
+    all_results = []  # [{site, label, success, message}, ...]
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -710,42 +739,55 @@ async def main():
         )
         ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 
-        ctx1 = await browser.new_context(user_agent=ua)
-        page1 = await ctx1.new_page()
-        results["site1"] = await checkin_site1(page1)
-        await ctx1.close()
+        # 网站1: justcn2.top 多账号
+        for acc in SITE1_ACCOUNTS:
+            ctx = await browser.new_context(user_agent=ua)
+            page = await ctx.new_page()
+            result = await checkin_site1(page, acc["email"], acc["pass"], acc["label"])
+            all_results.append(result)
+            await ctx.close()
 
-        ctx2 = await browser.new_context(user_agent=ua)
-        page2 = await ctx2.new_page()
-        results["site2"] = await checkin_site2(page2, ocr)
-        await ctx2.close()
+        # 网站2: 1ck.org 多账号
+        for acc in SITE2_ACCOUNTS:
+            ctx = await browser.new_context(user_agent=ua)
+            page = await ctx.new_page()
+            result = await checkin_site2(page, ocr, acc["email"], acc["pass"], acc["label"])
+            all_results.append(result)
+            await ctx.close()
 
         await browser.close()
 
     # 汇总
-    s1 = results["site1"]
-    s2 = results["site2"]
     log.info("══════════════════════════════")
-    log.info(f"网站1 justcn2.top : {'✅' if s1['success'] else '❌'} {s1['message']}")
-    log.info(f"网站2 1ck.org     : {'✅' if s2['success'] else '❌'} {s2['message']}")
+    for r in all_results:
+        emoji = "✅" if r["success"] else "❌"
+        log.info(f"{r['site']} {r['label']}: {emoji} {r['message']}")
     log.info("══════════════════════════════")
 
     # 发送邮件
-    all_ok = s1["success"] and s2["success"]
+    all_ok = all(r["success"] for r in all_results)
     emoji = "✅" if all_ok else "⚠️"
-    subject = f"{emoji} 每日签到报告 - {'全部成功' if all_ok else '部分失败'}"
-    email_body = f"""
-    <table style="border-collapse:collapse;width:100%">
-    <tr style="background:{'#d4edda' if s1['success'] else '#f8d7da'}">
-        <td style="padding:10px;border:1px solid #ddd"><b>网站1 justcn2.top</b></td>
-        <td style="padding:10px;border:1px solid #ddd">{'✅ 成功' if s1['success'] else '❌ 失败'}</td>
-        <td style="padding:10px;border:1px solid #ddd">{s1['message']}</td>
+    subject = f"{emoji} 每日签到报告 ({len(all_results)}个账号) - {'全部成功' if all_ok else '部分失败'}"
+
+    rows = ""
+    for r in all_results:
+        bg = "#d4edda" if r["success"] else "#f8d7da"
+        status = "✅ 成功" if r["success"] else "❌ 失败"
+        rows += f"""<tr style="background:{bg}">
+            <td style="padding:10px;border:1px solid #ddd"><b>{r['site']}</b></td>
+            <td style="padding:10px;border:1px solid #ddd">{r['label']}</td>
+            <td style="padding:10px;border:1px solid #ddd">{status}</td>
+            <td style="padding:10px;border:1px solid #ddd">{r['message']}</td>
+        </tr>"""
+
+    email_body = f"""<table style="border-collapse:collapse;width:100%">
+    <tr style="background:#f0f0f0">
+        <th style="padding:10px;border:1px solid #ddd">网站</th>
+        <th style="padding:10px;border:1px solid #ddd">账号</th>
+        <th style="padding:10px;border:1px solid #ddd">状态</th>
+        <th style="padding:10px;border:1px solid #ddd">详情</th>
     </tr>
-    <tr style="background:{'#d4edda' if s2['success'] else '#f8d7da'}">
-        <td style="padding:10px;border:1px solid #ddd"><b>网站2 1ck.org</b></td>
-        <td style="padding:10px;border:1px solid #ddd">{'✅ 成功' if s2['success'] else '❌ 失败'}</td>
-        <td style="padding:10px;border:1px solid #ddd">{s2['message']}</td>
-    </tr>
+    {rows}
     </table>"""
     send_email(subject, email_body)
 
