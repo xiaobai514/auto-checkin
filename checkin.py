@@ -353,7 +353,8 @@ async def checkin_site2(page, ocr):
         base_url = page.url.split('/login')[0] if '/login' in page.url else page.url.rsplit('/', 1)[0]
         log.info(f"[网站2] 最终URL: {page.url}")
 
-        # 3. 进入登录界面 - 直接访问登录页
+        # 3. 进入登录界面
+        import random
         login_url = f"{base_url}/login"
         log.info(f"[网站2] 访问登录页: {login_url}")
         await page.goto(login_url, wait_until="networkidle", timeout=30000)
@@ -412,14 +413,12 @@ async def checkin_site2(page, ocr):
 
             # 处理验证码
             captcha_selectors_img = [
-                'img[src*="captcha"]', 'img[id*="captcha"]', 
+                # base64 验证码图片（最优先，避免匹配到其他base64图片如logo）
+                'img.my-auto[src^="data:"]',
+                'img[src*="captcha"]', 'img[id*="captcha"]',
                 '.captcha img', 'img[alt*="验证码"]',
                 'img[src*="code"]', 'img[alt*="captcha"]',
                 'img.captcha', '#captcha-img',
-                # base64 验证码图片（宽高较小的图片）
-                'img[src^="data:"][width="150"]',
-                'img[src^="data:"][width="120"]',
-                'img.my-auto[src^="data:"]',
             ]
             
             captcha_input = None
@@ -454,7 +453,13 @@ async def checkin_site2(page, ocr):
                         img_bytes = await captcha_img.screenshot()
                     
                     code = ocr.classification(img_bytes)
-                    # 过滤非数字字符（ddddocr有时会识别出字母）
+                    # 字母→数字映射（ddddocr有时把数字识别成字母）
+                    char_map = {'o': '0', 'O': '0', 'l': '1', 'I': '1', 'i': '1', 
+                                'z': '2', 'Z': '2', 's': '5', 'S': '5', 'b': '6',
+                                'g': '9', 'q': '9', 'G': '9', 'c': '0', 'C': '0',
+                                'd': '0', 'D': '0', 'e': '8', 'B': '8'}
+                    code = ''.join(char_map.get(c, c) for c in code)
+                    # 过滤非数字字符
                     code = ''.join(c for c in code if c.isdigit())
                     # 只取前4位
                     if len(code) > 4:
@@ -488,7 +493,7 @@ async def checkin_site2(page, ocr):
                 break
 
             await page.wait_for_load_state("networkidle", timeout=15000)
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(5000)  # 登录成功需要3秒以上才能检测到
 
             # 检查登录结果
             current_url = page.url
