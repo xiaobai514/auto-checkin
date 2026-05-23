@@ -272,7 +272,9 @@ async def site2_is_logged_in(page):
 
     logged_in_selectors = [
         "text=退出", "text=登出", "text=注销", "text=用户中心",
-        "text=签到领奖", "a:has-text('Logout')", "button:has-text('Logout')",
+        "text=签到领奖", "text=今日已签到", "text=已签到",
+        "text=账户余额", "text=流量趋势", "text=我的订阅",
+        "a:has-text('Logout')", "button:has-text('Logout')",
     ]
     _, logged_in_marker = await first_visible(page, logged_in_selectors, timeout=800)
     return logged_in_marker is not None
@@ -359,8 +361,8 @@ async def checkin_site2(page, ocr):
 
         # 4. 尝试登录（最多5次验证码重试）
         login_success = False
-        for attempt in range(10):
-            log.info(f"[网站2] 登录尝试 {attempt+1}/10")
+        for attempt in range(20):
+            log.info(f"[网站2] 登录尝试 {attempt+1}/20")
 
             # 找邮箱输入框（多种选择器）
             email_filled = False
@@ -452,7 +454,15 @@ async def checkin_site2(page, ocr):
                         img_bytes = await captcha_img.screenshot()
                     
                     code = ocr.classification(img_bytes)
+                    # 过滤非数字字符（ddddocr有时会识别出字母）
+                    code = ''.join(c for c in code if c.isdigit())
+                    # 只取前4位
+                    if len(code) > 4:
+                        code = code[:4]
                     log.info(f"[网站2] OCR识别验证码: {code}")
+                    if len(code) < 4:
+                        log.warning(f"[网站2] 验证码位数不足: {code}")
+                        continue
                     await captcha_input.fill(str(code))
                 except Exception as e:
                     log.warning(f"[网站2] 验证码处理失败: {e}")
@@ -498,6 +508,22 @@ async def checkin_site2(page, ocr):
 
         # 6. 签到 - 右上部"签到领奖"
         await page.wait_for_timeout(2000)
+        
+        # 先检查是否已签到
+        checkin_done_selectors = [
+            "text=今日已签到", "text=已签到", "text=已领取",
+        ]
+        for sel in checkin_done_selectors:
+            try:
+                el = page.locator(sel).first
+                if await el.is_visible(timeout=1000):
+                    log.info("[网站2] 今日已签到")
+                    result["success"] = True
+                    result["message"] = "今日已签到"
+                    return result
+            except:
+                continue
+        
         checkin_selectors = [
             "text=签到领奖", "text=签到", "text=每日签到",
             "button:has-text('签到')", "a:has-text('签到')",
