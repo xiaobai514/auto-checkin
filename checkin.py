@@ -514,11 +514,37 @@ async def checkin_site2(page, ocr):
         # 6. 签到 - 右上部"签到领奖"
         await page.wait_for_timeout(8000)  # 等待页面完全加载（登录后需要较长时间）
         await page.wait_for_load_state("networkidle", timeout=15000)
-        
+
         # 滚动到顶部，确保签到按钮可见
         await page.evaluate("window.scrollTo(0, 0)")
         await page.wait_for_timeout(1000)
-        
+
+        # 关闭可能的弹窗/公告遮挡（快冲云可能有公告弹窗）
+        close_selectors = [
+            "button.close", ".close-btn", "[aria-label='Close']",
+            "button:has-text('关闭')", "button:has-text('我知道了')",
+            "button:has-text('确定')", "button:has-text('OK')",
+            ".modal .close", ".swal2-close", ".swal2-confirm",
+            "[data-dismiss='modal']", ".ant-modal-close",
+            ".layui-layer-close", ".layer-close",
+        ]
+        for sel in close_selectors:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible(timeout=500):
+                    await btn.click()
+                    log.info(f"[网站2] 关闭弹窗: {sel}")
+                    await page.wait_for_timeout(500)
+            except Exception:
+                continue
+
+        # 点击页面安全区域关闭可能的下拉/提示
+        await page.mouse.click(400, 400)
+        await page.wait_for_timeout(500)
+
+        # 截图记录当前页面状态（调试用）
+        await page.screenshot(path="/tmp/site2_before_checkin.png")
+
         # 先检查是否已签到
         checkin_done_selectors = [
             "text=今日已签到", "text=已签到", "text=已领取",
@@ -533,26 +559,112 @@ async def checkin_site2(page, ocr):
                     return result
             except:
                 continue
-        
+
+        # 签到按钮选择器 - 优先匹配精确文本
         checkin_selectors = [
-            "text=签到领奖", "text=签到", "text=每日签到",
-            "button:has-text('签到')", "a:has-text('签到')",
-            "[onclick*='checkin']", ".checkin-btn", "#checkin",
+            "text=签到领奖",
+            "button:has-text('签到领奖')",
+            "a:has-text('签到领奖')",
+            "div:has-text('签到领奖')",
+            "span:has-text('签到领奖')",
+            "text=每日签到",
+            "text=点击签到",
+            "button:has-text('签到')",
+            "a:has-text('签到')",
+            "[onclick*='checkin']",
+            "[onclick*='sign']",
+            ".checkin-btn", "#checkin",
         ]
         clicked = False
+
+        # 尝试1: 使用 expect_response 等待可能的API调用
         for sel in checkin_selectors:
             try:
-                btn = page.locator(sel).first
-                if await btn.is_visible(timeout=3000):
-                    await btn.click()
-                    clicked = True
-                    log.info(f"[网站2] 点击签到: {sel}")
+                # 用 all() 找所有匹配元素，逐个检查可见性
+                locators = page.locator(sel)
+                count = await locators.count()
+                log.info(f"[网站2] 选择器 '{sel}' 匹配到 {count} 个元素")
+                for i in range(count):
+                    el = locators.nth(i)
+                    try:
+                        if await el.is_visible(timeout=1000):
+                            # 滚动到元素位置确保可见
+                            await el.scroll_into_view_if_needed(timeout=3000)
+                            await page.wait_for_timeout(500)
+                            await el.click(timeout=5000)
+                            clicked = True
+                            log.info(f"[网站2] 点击签到: {sel} (第{i+1}个匹配)")
+                            break
+                    except Exception as e:
+                        log.debug(f"[网站2] 元素 {sel}[{i}] 不可点击: {e}")
+                        continue
+                if clicked:
                     break
-            except Exception:
+            except Exception as e:
+                log.debug(f"[网站2] 选择器 {sel} 失败: {e}")
                 continue
 
+        # 尝试2: 用 JavaScript 直接查找并点击
         if not clicked:
-            log.warning("[网站2] 未找到签到按钮")
+            log.info("[网站2] 尝试 JS 直接查找签到按钮...")
+            js_result = await page.evaluate("""
+                () => {
+                    // 查找所有包含"签到"文本的元素
+                    const all = document.querySelectorAll('*');
+                    const found = [];
+                    for (const el of all) {
+                        if (el.textContent && el.textContent.includes('签到领奖') &&
+                            el.children.length === 0) {  // 叶子节点
+                            const rect = el.getBoundingClientRect();
+                            found.push({
+                                tag: el.tagName,
+                                text: el.textContent.trim().substring(0, 50),
+                                visible: rect.width > 0 && rect.height > 0,
+                                x: rect.x, y: rect.y,
+                                w: rect.width, h: rect.height,
+                                onclick: !!el.onclick,
+                                href: el.href || '',
+                                className: el.className || '',
+                            });
+                        }
+                    }
+                    return found;
+                }
+            """)
+            log.info(f"[网站2] JS找到 {len(js_result)} 个签到元素: {js_result}")
+
+            for item in js_result:
+                if item.get('visible') and item.get('w', 0) > 10:
+                    try:
+                        # 用坐标点击
+                        await page.mouse.click(
+                            item['x'] + item['w'] / 2,
+                            item['y'] + item['h'] / 2
+                        )
+                        clicked = True
+                        log.info(f"[网站2] JS坐标点击签到: {item}")
+                        break
+                    except Exception as e:
+                        log.warning(f"[网站2] JS坐标点击失败: {e}")
+
+        # 尝试3: 用 getByText 精确匹配
+        if not clicked:
+            log.info("[网站2] 尝试 getByText 查找...")
+            for text in ["签到领奖", "签到", "每日签到"]:
+                try:
+                    el = page.get_by_text(text, exact=False).first
+                    if await el.is_visible(timeout=2000):
+                        await el.scroll_into_view_if_needed(timeout=3000)
+                        await el.click(timeout=5000)
+                        clicked = True
+                        log.info(f"[网站2] getByText 点击: {text}")
+                        break
+                except Exception as e:
+                    log.debug(f"[网站2] getByText '{text}' 失败: {e}")
+                    continue
+
+        if not clicked:
+            log.warning("[网站2] 仍未找到签到按钮")
             await page.screenshot(path="/tmp/site2_debug.png")
             result["message"] = "未找到签到按钮"
             return result
