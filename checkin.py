@@ -512,7 +512,8 @@ async def checkin_site2(page, ocr):
             return result
 
         # 6. 签到 - 右上部"签到领奖"
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(5000)  # 等待页面完全加载
+        await page.wait_for_load_state("networkidle", timeout=15000)
         
         # 先检查是否已签到
         checkin_done_selectors = [
