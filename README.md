@@ -1,132 +1,113 @@
-# 每日自动签到机器人
+# 🔄 每日自动签到
 
-自动完成以下两个网站的每日签到：
-- **justcn2.top** — 登录 → 用户中心 → 签到
-- **1ck.org** — 登录（含验证码自动识别）→ 首页签到
+自动签到 justcn2.top 和 1ck.org，支持多账号，签到结果邮件通知。
 
----
+## 运行方式
 
-## 📁 文件结构
+- **定时执行**：每天北京时间 00:30（GitHub Actions cron `30 16 * * *` UTC）
+- **手动触发**：GitHub 仓库 → Actions → 每日自动签到 → Run workflow
+- **完全独立**：跑在 GitHub 服务器上，本地断网不影响
+
+## 技术栈
+
+- Python 3.11 + Playwright（headless Chromium）
+- ddddocr（验证码 OCR 识别）
+- GitHub Actions（定时 + 运行环境）
+- QQ 邮箱 SMTP_SSL（邮件通知）
+
+## GitHub Secrets 配置
+
+仓库 → Settings → Secrets and variables → Actions → New repository secret
+
+### 网站1：justcn2.top（2个账号）
+
+| Name           | Value          |
+|----------------|----------------|
+| SITE1_EMAIL_1  | 第1个账号邮箱   |
+| SITE1_PASS_1   | 第1个账号密码   |
+| SITE1_EMAIL_2  | 第2个账号邮箱   |
+| SITE1_PASS_2   | 第2个账号密码   |
+
+### 网站2：1ck.org（2个账号）
+
+| Name           | Value          |
+|----------------|----------------|
+| SITE2_EMAIL_1  | 第1个账号邮箱   |
+| SITE2_PASS_1   | 第1个账号密码   |
+| SITE2_EMAIL_2  | 第2个账号邮箱   |
+| SITE2_PASS_2   | 第2个账号密码   |
+
+### 邮件通知
+
+| Name          | Value              |
+|---------------|--------------------|
+| SMTP_SERVER   | smtp.qq.com        |
+| SMTP_PORT     | 465                |
+| SMTP_USER     | 2429699640@qq.com  |
+| SMTP_PASS     | QQ邮箱授权码        |
+| NOTIFY_EMAIL  | 2429699640@qq.com  |
+
+## 添加更多账号
+
+代码自动发现账号数量，只需新增 Secrets：
 
 ```
-├── checkin.py                        # 主签到脚本
-├── requirements.txt                  # Python 依赖
-├── .gitignore                        # 防止泄露本地凭据
-└── .github/
-    └── workflows/
-        └── checkin.yml               # GitHub Actions 定时任务
+SITE1_EMAIL_3 / SITE1_PASS_3    # 网站1 第3个账号
+SITE2_EMAIL_3 / SITE2_PASS_3    # 网站2 第3个账号
 ```
 
----
+然后在 `.github/workflows/checkin.yml` 的 `env` 段加上对应行即可。
 
-## 🚀 部署步骤
+## 签到流程
 
-### 第一步：创建 GitHub 私有仓库
+### 网站1 justcn2.top
+1. 访问登录页 → 填写邮箱密码 → 提交
+2. 跳转用户中心 → 关闭弹窗/公告
+3. 检查是否已签到 → 点击签到按钮
+4. 确认签到结果
 
-1. 登录 [github.com](https://github.com)
-2. 右上角 **+** → **New repository**
-3. 填写仓库名，例如 `auto-checkin`
-4. 选择 **Private**（私有，重要！）
-5. 点击 **Create repository**
+### 网站2 1ck.org
+1. 访问 1ck.org → 自动跳转找可用节点
+2. 进入登录页 → 填写邮箱密码 + 验证码（ddddocr 识别）
+3. 验证码支持字母→数字映射（o→0, l→1, s→5 等）
+4. 最多 20 次验证码重试
+5. 登录后关闭弹窗 → 点击签到领奖
+6. 多策略查找按钮：Playwright选择器 → JS DOM遍历坐标点击 → getByText
 
----
+## 邮件通知格式
 
-### 第二步：上传代码到仓库
+```
+✅ 每日签到报告 (4个账号) - 全部成功
 
-在 WSL 终端执行：
-
-```bash
-# 进入脚本目录（根据你的实际路径调整）
-cd /path/to/checkin
-
-# 初始化 git
-git init
-git add .
-git commit -m "初始化签到脚本"
-
-# 关联远程仓库（替换 YOUR_USERNAME 为你的 GitHub 用户名）
-git remote add origin https://github.com/YOUR_USERNAME/auto-checkin.git
-git branch -M main
-git push -u origin main
+| 网站         | 账号   | 状态     | 详情         |
+|-------------|--------|---------|-------------|
+| justcn2.top | 账号1  | ✅ 成功  | 签到成功 +5积分 |
+| justcn2.top | 账号2  | ✅ 成功  | 今日已签到     |
+| 1ck.org     | 账号1  | ✅ 成功  | 签到成功 +500MB |
+| 1ck.org     | 账号2  | ❌ 失败  | 登录失败       |
 ```
 
----
+## 已知问题
 
-### 第三步：配置 GitHub Secrets（存储密码）
+- **GitHub Actions 定时延迟**：GitHub 负载高时 cron 可能延迟几小时执行，正常现象
+- **验证码识别**：ddddocr 对某些验证码识别率不高，已做字母→数字映射优化
+- **1ck.org 跳转**：每次访问可能跳到不同域名，代码自动适应
+- **libasound2**：Ubuntu 24.04 已改名 libasound2t64，workflow 已处理
 
-1. 打开你的仓库页面
-2. 点击顶部 **Settings** → 左侧 **Secrets and variables** → **Actions**
-3. 点击 **New repository secret**，依次添加以下 4 个：
+## 调试
 
-| Secret 名称 | 值 |
-|-------------|-----|
-| `SITE1_EMAIL` | q748949062@gmail.com |
-| `SITE1_PASS`  | 你的 justcn2.top 密码 |
-| `SITE2_EMAIL` | q748949062@gmail.com |
-| `SITE2_PASS`  | 你的 1ck.org 密码 |
+失败时 Actions 会自动上传截图到 Artifacts（保留3天）：
+- `site1_debug.png` / `site1_error.png` — 网站1签到页面状态
+- `site2_debug.png` / `site2_error.png` — 网站2签到页面状态
+- `site2_before_checkin.png` — 网站2签到前页面状态
+- `site2_no_email.png` / `site2_no_password.png` — 登录表单异常
 
-> ⚠️ 密码在 Secrets 里是加密的，GitHub 员工也看不到，日志里也不会显示。
+## 修改历史
 
----
-
-### 第四步：手动触发测试
-
-1. 仓库页面 → 点击 **Actions** 选项卡
-2. 左侧选择 **每日自动签到**
-3. 右侧点击 **Run workflow** → **Run workflow**
-4. 等待约 2-3 分钟，查看运行结果
-
-**绿色 ✅ = 成功，红色 ❌ = 失败（点进去看日志）**
-
----
-
-### 运行时间
-
-默认每天 **北京时间 08:00** 自动运行。
-
-如需修改时间，编辑 `.github/workflows/checkin.yml` 中的 cron 表达式：
-```yaml
-- cron: "0 0 * * *"   # UTC 00:00 = 北京时间 08:00
-```
-
-常用时间参考：
-- 北京 07:00 → `0 23 * * *`（前一天UTC）
-- 北京 09:00 → `0 1 * * *`
-- 北京 12:00 → `0 4 * * *`
-
----
-
-## 🔧 本地调试（WSL）
-
-```bash
-# 安装依赖
-pip install -r requirements.txt
-playwright install chromium
-
-# 设置临时环境变量
-export SITE1_EMAIL="你的邮箱"
-export SITE1_PASS="你的密码"
-export SITE2_EMAIL="你的邮箱"
-export SITE2_PASS="你的密码"
-
-# 运行
-python checkin.py
-```
-
----
-
-## 📸 失败排查
-
-签到失败时，Actions 会自动保存截图。
-
-1. 点击失败的 workflow run
-2. 右下角 **Artifacts** → 下载 `debug-screenshots`
-3. 查看截图了解失败原因
-
----
-
-## ⚠️ 注意事项
-
-- 仓库必须设为 **Private（私有）**
-- 不要在代码里硬编码密码，只用 Secrets
-- GitHub Actions 免费版每月有 2000 分钟，每次运行约 3 分钟，每天一次完全够用
+| 日期       | 说明                                              |
+|-----------|--------------------------------------------------|
+| 2026-05-24 | 多账号支持 + 邮件表格汇总 + 签到按钮查找增强         |
+| 2026-05-24 | 定时改为凌晨 0:30                                  |
+| 2026-05-23 | 网站2验证码字母→数字映射 + 登录等待时间优化          |
+| 2026-05-23 | 网站1已签到检测 + 网站2验证码20次重试               |
+| 2026-05-21 | 初始版本：两站签到 + 邮件通知 + GitHub Actions      |
