@@ -392,27 +392,23 @@ async def site2_log_login_debug(page, tag, reason):
 async def site2_find_captcha_image(page, captcha_input=None, tag=""):
     captcha_selectors_img = [
         'img.my-auto[src^="data:"]',
-        'img.my-auto',
-        'img[alt="cover"]',
+        'img[src^="data:"][alt="cover"]',
         'img[src^="data:image"]',
         'img[src^="data:text/html"]',
         'img[src^="data:"]',
-        'img[src*="captcha"]',
-        'img[id*="captcha"]',
-        '.captcha img',
-        'img[alt*="验证码"]',
-        'img[src*="code"]',
-        'img[alt*="captcha"]',
-        'img.captcha',
-        '#captcha-img',
     ]
 
-    for sel in captcha_selectors_img[:6]:
-        try:
-            await page.wait_for_selector(sel, state="visible", timeout=3000)
-            break
-        except Exception:
-            continue
+    try:
+        await page.wait_for_function(
+            """() => Array.from(document.images).some(img =>
+                (img.getAttribute("src") || "").startsWith("data:") &&
+                img.naturalWidth >= 50 &&
+                img.naturalHeight >= 20
+            )""",
+            timeout=5000,
+        )
+    except Exception:
+        pass
 
     for sel in captcha_selectors_img:
         try:
@@ -423,9 +419,8 @@ async def site2_find_captcha_image(page, captcha_input=None, tag=""):
                 if not await img.is_visible(timeout=1000):
                     continue
                 src = await img.get_attribute("src") or ""
-                box = await img.bounding_box()
-                if src.startswith("data:") or box:
-                    log.info(f"{tag} 找到验证码图片: {sel} (第{idx+1}个匹配)")
+                if src.startswith("data:"):
+                    log.info(f"{tag} 找到验证码图片: {sel} (第{idx+1}个匹配, srcLength={len(src)})")
                     return sel, img
         except Exception:
             continue
@@ -442,10 +437,13 @@ async def site2_find_captcha_image(page, captcha_input=None, tag=""):
                 box = await img.bounding_box()
                 if not input_box or not box:
                     continue
+                src = await img.get_attribute("src") or ""
+                if not src.startswith("data:"):
+                    continue
                 near_y = abs((box["y"] + box["height"] / 2) - (input_box["y"] + input_box["height"] / 2)) < 120
                 near_x = box["x"] >= input_box["x"] - 20
                 if near_y and near_x:
-                    log.info(f"{tag} 通过验证码输入框附近定位到图片 (img 第{idx+1}个)")
+                    log.info(f"{tag} 通过验证码输入框附近定位到图片 (img 第{idx+1}个, srcLength={len(src)})")
                     return "near captcha input", img
         except Exception as e:
             log.warning(f"{tag} 按输入框附近查找验证码图片失败: {e}")
@@ -596,6 +594,9 @@ async def checkin_site2(page, ocr, email, password, label="账号1"):
             else:
                 log.warning(f"{tag} 未找到验证码元素 (input={captcha_input is not None}, img={captcha_img is not None})")
                 await site2_log_login_debug(page, tag, f"captcha_missing_{label}_{attempt+1}")
+                await page.goto(login_url, wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(2000)
+                continue
 
             # 提交登录
             submitted = False
