@@ -344,6 +344,115 @@ async def site2_find_captcha_input(page, email=""):
 # ════════════════════════════════════════════════════════
 #  网站 2：1ck.org（自动跳转找节点 + 验证码）
 # ════════════════════════════════════════════════════════
+async def site2_log_login_debug(page, tag, reason):
+    """Log safe login-page metadata without dumping secrets or full base64 images."""
+    try:
+        await page.screenshot(path=f"/tmp/site2_{reason}.png")
+    except Exception as e:
+        log.warning(f"{tag} 保存调试截图失败: {e}")
+
+    try:
+        input_meta = await page.locator("input").evaluate_all(
+            """els => els.map((e, i) => ({
+                i,
+                type: e.type,
+                name: e.name,
+                id: e.id,
+                placeholder: e.placeholder,
+                cls: e.className,
+                visible: !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length)
+            }))"""
+        )
+        log.info(f"{tag} 登录页 input 元数据: {input_meta}")
+    except Exception as e:
+        log.warning(f"{tag} 读取 input 元数据失败: {e}")
+
+    try:
+        img_meta = await page.locator("img").evaluate_all(
+            """els => els.map((e, i) => {
+                const src = e.getAttribute("src") || "";
+                return {
+                    i,
+                    alt: e.alt,
+                    id: e.id,
+                    cls: e.className,
+                    w: e.naturalWidth,
+                    h: e.naturalHeight,
+                    visible: !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length),
+                    srcPrefix: src.slice(0, 32),
+                    srcLength: src.length
+                };
+            })"""
+        )
+        log.info(f"{tag} 登录页 img 元数据: {img_meta}")
+    except Exception as e:
+        log.warning(f"{tag} 读取 img 元数据失败: {e}")
+
+
+async def site2_find_captcha_image(page, captcha_input=None, tag=""):
+    captcha_selectors_img = [
+        'img.my-auto[src^="data:"]',
+        'img.my-auto',
+        'img[alt="cover"]',
+        'img[src^="data:image"]',
+        'img[src^="data:text/html"]',
+        'img[src^="data:"]',
+        'img[src*="captcha"]',
+        'img[id*="captcha"]',
+        '.captcha img',
+        'img[alt*="验证码"]',
+        'img[src*="code"]',
+        'img[alt*="captcha"]',
+        'img.captcha',
+        '#captcha-img',
+    ]
+
+    for sel in captcha_selectors_img[:6]:
+        try:
+            await page.wait_for_selector(sel, state="visible", timeout=3000)
+            break
+        except Exception:
+            continue
+
+    for sel in captcha_selectors_img:
+        try:
+            candidates = page.locator(sel)
+            count = await candidates.count()
+            for idx in range(count):
+                img = candidates.nth(idx)
+                if not await img.is_visible(timeout=1000):
+                    continue
+                src = await img.get_attribute("src") or ""
+                box = await img.bounding_box()
+                if src.startswith("data:") or box:
+                    log.info(f"{tag} 找到验证码图片: {sel} (第{idx+1}个匹配)")
+                    return sel, img
+        except Exception:
+            continue
+
+    if captcha_input:
+        try:
+            input_box = await captcha_input.bounding_box()
+            images = page.locator("img")
+            count = await images.count()
+            for idx in range(count):
+                img = images.nth(idx)
+                if not await img.is_visible(timeout=500):
+                    continue
+                box = await img.bounding_box()
+                if not input_box or not box:
+                    continue
+                near_y = abs((box["y"] + box["height"] / 2) - (input_box["y"] + input_box["height"] / 2)) < 120
+                near_x = box["x"] >= input_box["x"] - 20
+                if near_y and near_x:
+                    log.info(f"{tag} 通过验证码输入框附近定位到图片 (img 第{idx+1}个)")
+                    return "near captcha input", img
+        except Exception as e:
+            log.warning(f"{tag} 按输入框附近查找验证码图片失败: {e}")
+
+    return None, None
+
+
 async def checkin_site2(page, ocr, email, password, label="账号1"):
     tag = f"[网站2-{label}]"
     log.info(f"=== {tag} 1ck.org 开始签到 ===")
@@ -436,15 +545,6 @@ async def checkin_site2(page, ocr, email, password, label="账号1"):
                 break
 
             # 处理验证码
-            captcha_selectors_img = [
-                # base64 验证码图片（最优先，避免匹配到其他base64图片如logo）
-                'img.my-auto[src^="data:"]',
-                'img[src*="captcha"]', 'img[id*="captcha"]',
-                '.captcha img', 'img[alt*="验证码"]',
-                'img[src*="code"]', 'img[alt*="captcha"]',
-                'img.captcha', '#captcha-img',
-            ]
-            
             captcha_input = None
             captcha_img = None
             
@@ -454,15 +554,7 @@ async def checkin_site2(page, ocr, email, password, label="账号1"):
                 log.info(f"{tag} 找到验证码输入框: {captcha_input_sel}")
             
             # 找验证码图片
-            for sel in captcha_selectors_img:
-                try:
-                    img = page.locator(sel).first
-                    if await img.is_visible(timeout=1000):
-                        captcha_img = img
-                        log.info(f"{tag} 找到验证码图片: {sel}")
-                        break
-                except:
-                    continue
+            captcha_img_sel, captcha_img = await site2_find_captcha_image(page, captcha_input, tag)
             
             if captcha_img and captcha_input:
                 try:
@@ -497,6 +589,7 @@ async def checkin_site2(page, ocr, email, password, label="账号1"):
                     log.warning(f"{tag} 验证码处理失败: {e}")
             else:
                 log.warning(f"{tag} 未找到验证码元素 (input={captcha_input is not None}, img={captcha_img is not None})")
+                await site2_log_login_debug(page, tag, f"captcha_missing_{label}_{attempt+1}")
 
             # 提交登录
             submitted = False
