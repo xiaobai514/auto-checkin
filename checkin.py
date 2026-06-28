@@ -581,8 +581,14 @@ async def checkin_site2(page, ocr, email, password, label="账号1"):
                     if len(code) > 4:
                         code = code[:4]
                     log.info(f"{tag} OCR识别验证码: {code}")
-                    if len(code) < 4:
+                    if len(code) == 3:
+                        padded_code = code.zfill(4)
+                        log.warning(f"{tag} 验证码位数不足，按前导0补齐重试: {code} -> {padded_code}")
+                        code = padded_code
+                    elif len(code) < 3:
                         log.warning(f"{tag} 验证码位数不足: {code}")
+                        await page.goto(login_url, wait_until="networkidle", timeout=30000)
+                        await page.wait_for_timeout(2000)
                         continue
                     await captcha_input.fill(str(code))
                 except Exception as e:
