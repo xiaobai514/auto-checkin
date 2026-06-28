@@ -51,9 +51,15 @@ def load_accounts(prefix):
 
 SITE1_ACCOUNTS = load_accounts("SITE1")
 SITE2_ACCOUNTS = load_accounts("SITE2")
+CHECKIN_TARGETS = {
+    item.strip().lower()
+    for item in os.getenv("CHECKIN_TARGETS", "site1").split(",")
+    if item.strip()
+}
 
 log.info(f"网站1 justcn2.top: {len(SITE1_ACCOUNTS)} 个账号")
 log.info(f"网站2 1ck.org    : {len(SITE2_ACCOUNTS)} 个账号")
+log.info(f"启用站点: {', '.join(sorted(CHECKIN_TARGETS)) or 'none'}")
 
 # ── 邮件配置 ──────────────────────────────────────────────
 SMTP_SERVER  = os.environ.get("SMTP_SERVER", "smtp.qq.com")
@@ -825,11 +831,14 @@ async def checkin_site2(page, ocr, email, password, label="账号1"):
 async def main():
     log.info(f"签到任务开始 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    if not SITE1_ACCOUNTS and not SITE2_ACCOUNTS:
+    enabled_site1_accounts = SITE1_ACCOUNTS if "site1" in CHECKIN_TARGETS else []
+    enabled_site2_accounts = SITE2_ACCOUNTS if "site2" in CHECKIN_TARGETS else []
+
+    if not enabled_site1_accounts and not enabled_site2_accounts:
         log.error("没有配置任何账号！请设置 SITE1_EMAIL_1/SITE1_PASS_1 等环境变量")
         sys.exit(1)
 
-    ocr = get_ocr()
+    ocr = get_ocr() if enabled_site2_accounts else None
     all_results = []  # [{site, label, success, message}, ...]
 
     async with async_playwright() as p:
@@ -840,7 +849,7 @@ async def main():
         ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 
         # 网站1: justcn2.top 多账号
-        for acc in SITE1_ACCOUNTS:
+        for acc in enabled_site1_accounts:
             ctx = await browser.new_context(user_agent=ua)
             page = await ctx.new_page()
             result = await checkin_site1(page, acc["email"], acc["pass"], acc["label"])
@@ -848,7 +857,7 @@ async def main():
             await ctx.close()
 
         # 网站2: 1ck.org 多账号
-        for acc in SITE2_ACCOUNTS:
+        for acc in enabled_site2_accounts:
             ctx = await browser.new_context(user_agent=ua)
             page = await ctx.new_page()
             result = await checkin_site2(page, ocr, acc["email"], acc["pass"], acc["label"])
